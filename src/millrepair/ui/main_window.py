@@ -10,7 +10,9 @@ from millrepair import get_version
 from millrepair.cli import open_database
 from millrepair.db import Database
 from millrepair.ui.tabs.calc_tab import CalcTab
+from millrepair.ui.tabs.measurements_tab import MeasurementsTab
 from millrepair.ui.tabs.model_tab import ModelTab
+from millrepair.ui.tabs.regime_tab import RegimeTab
 
 
 class MainWindow(QMainWindow):
@@ -25,8 +27,12 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setObjectName("mainTabs")
         self.model_tab = ModelTab(self)
+        self.regime_tab = RegimeTab(self)
+        self.measurements_tab = MeasurementsTab(self)
         self.calc_tab = CalcTab(self)
         self.tabs.addTab(self.model_tab, "Модель")
+        self.tabs.addTab(self.regime_tab, "Режим и ограничения")
+        self.tabs.addTab(self.measurements_tab, "Замеры")
         self.tabs.addTab(self.calc_tab, "Расчёт")
         self.setCentralWidget(self.tabs)
         self.tabs.currentChanged.connect(self._tab_changed)
@@ -35,6 +41,8 @@ class MainWindow(QMainWindow):
     def reload_model(self) -> None:
         self.model = self.db.load_active_model()
         self.model_tab.reload()
+        self.regime_tab.reload()
+        self.measurements_tab.reload()
         self.calc_tab.reload()
 
     def _tab_changed(self, _index: int) -> None:
