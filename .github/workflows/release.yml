@@ -1,0 +1,72 @@
+# Запасной выпуск бинарников, когда собрать их локально нельзя.
+# Тесты не запускаются: они уже прошли на машине разработчика.
+# Минуты GitHub Actions ограничены, а минуты Windows-раннеров на приватных
+# репозиториях списываются с коэффициентом 2. Поэтому workflow стартует
+# только вручную и не подписан на push или теги.
+#
+# Релиз v<версия> должен уже существовать (его создаёт scripts/release.sh).
+# Сборка вызывает packaging/build_deb.sh и scripts/build_win.ps1, логика не дублируется.
+
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия без префикса v, например 0.1.0"
+        required: true
+        type: string
+      platforms:
+        description: "Платформы"
+        required: true
+        type: choice
+        options:
+          - both
+          - linux
+          - windows
+        default: both
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Linux deb
+    if: inputs.platforms == 'linux' || inputs.platforms == 'both'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Системные пакеты для проверки deb
+        run: sudo apt-get update && sudo apt-get install -y binutils lintian
+      - name: Сборка и smoke-тест
+        run: bash packaging/build_deb.sh "${{ inputs.version }}"
+      - name: Загрузка в существующий релиз
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "v${{ inputs.version }}"
+          gh release upload "v${{ inputs.version }}" \
+            "packaging/output/millrepair_${{ inputs.version }}_amd64.deb" \
+            --clobber
+
+  windows:
+    name: Windows zip
+    if: inputs.platforms == 'windows' || inputs.platforms == 'both'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Сборка, smoke-тест и загрузка
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/build_win.ps1 "${{ inputs.version }}" -SkipTests
