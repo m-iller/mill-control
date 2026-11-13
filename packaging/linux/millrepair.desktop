@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Окно капремонта мельницы
+Comment=Мониторинг и момент капремонта барабанной шаровой мельницы
+Exec=millrepair
+Icon=millrepair
+Terminal=false
+Categories=Science;Engineering;
+StartupWMClass=millrepair

@@ -1,0 +1,7 @@
+# Каталог /opt/millrepair — заданная схема установки самодостаточного приложения.
+dir-or-file-in-opt
+# PyInstaller кладёт неотфильтрованные бинарники и свои копии библиотек.
+unstripped-binary-or-object
+embedded-library
+library-not-linked-against-libc
+shared-library-is-executable

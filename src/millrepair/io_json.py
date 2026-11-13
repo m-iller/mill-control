@@ -81,9 +81,12 @@ def save_model_file(model: Model, path: Path) -> None:
 def read_default_model_text() -> str:
     """Текст seed-модели.
 
-    Сначала пакетный ресурс (исходники и сборка PyInstaller через
-    importlib.resources), затем файл ``seed/default_model.json`` рядом с репозиторием.
+    Сначала пакетный ресурс через importlib.resources — так файл находится
+    и в исходниках, и в сборке. Если упаковщик положил его рядом с программой
+    не как ресурс пакета, читается тот же JSON из каталога данных сборки или
+    из ``seed/default_model.json`` в репозитории.
     """
+    import sys
     from importlib.resources import files
 
     try:
@@ -93,9 +96,16 @@ def read_default_model_text() -> str:
             return text
     except (FileNotFoundError, OSError, TypeError, ModuleNotFoundError):
         pass
+    candidates: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        base = Path(meipass)
+        candidates.append(base / "millrepair" / "data" / "default_model.json")
+        candidates.append(base / "seed" / "default_model.json")
     here = Path(__file__).resolve()
     for parent in here.parents:
-        candidate = parent / "seed" / "default_model.json"
+        candidates.append(parent / "seed" / "default_model.json")
+    for candidate in candidates:
         if candidate.is_file():
             return candidate.read_text(encoding="utf-8")
     raise FileNotFoundError("Не найден seed/default_model.json")

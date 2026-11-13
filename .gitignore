@@ -9,6 +9,7 @@ htmlcov/
 coverage.xml
 dist/
 build/
+packaging/output/
 *.egg-info/
 src/millrepair/_version.py
 *.sqlite
