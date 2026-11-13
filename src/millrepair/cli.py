@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 from millrepair import get_version
+from millrepair.db import Database, default_db_path
 from millrepair.engine import calculate, format_calc
-from millrepair.io_json import load_default_model
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,19 +47,32 @@ def main(argv: list[str] | None = None) -> int:
     return run_app(args.db)
 
 
-def run_calc(db_path: Path | None = None) -> int:
-    """Посчитать модель.
+def open_database(db_path: Path | None) -> Database:
+    database = Database(db_path or default_db_path())
+    database.migrate()
+    database.ensure_default()
+    return database
 
-    Пока нет базы, считается модель по умолчанию. Аргумент ``db_path``
-    зарезервирован и начнёт использоваться вместе с SQLite.
-    """
-    del db_path
+
+def run_calc(db_path: Path | None = None) -> int:
+    """Посчитать активную модель. Пустая база получает модель по умолчанию."""
     try:
-        model = load_default_model()
-        result = calculate(model)
+        database = open_database(db_path)
+    except Exception as exc:
+        print(f"Ошибка базы: {exc}", file=sys.stderr)
+        return 1
+    try:
+        model = database.load_active_model()
+        result = calculate(
+            model,
+            measurements=database.list_measurements(model.id),
+            periods=database.list_periods(model.id),
+        )
     except Exception as exc:
         print(f"Ошибка расчёта: {exc}", file=sys.stderr)
         return 1
+    finally:
+        database.close()
     print(format_calc(model, result))
     return 0
 
