@@ -35,11 +35,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"millrepair {get_version()}")
         return 0
     if args.optimize:
-        print(
-            "Оптимизация ещё не подключена в этой сборке шага. Запустите --calc.",
-            file=sys.stderr,
-        )
-        return 2
+        return run_optimize(args)
     if args.calc:
         return run_calc(args.db)
     from millrepair.ui.main_window import run_app
@@ -52,6 +48,33 @@ def open_database(db_path: Path | None) -> Database:
     database.migrate()
     database.ensure_default()
     return database
+
+
+def run_optimize(args: argparse.Namespace) -> int:
+    from millrepair.optimize import format_optimize, optimize
+
+    try:
+        database = open_database(args.db)
+    except Exception as exc:
+        print(f"Ошибка базы: {exc}", file=sys.stderr)
+        return 1
+    try:
+        model = database.load_active_model()
+        result = optimize(
+            model,
+            measurements=database.list_measurements(model.id),
+            periods=database.list_periods(model.id),
+            maxiter=args.maxiter if args.maxiter is not None else 8,
+            popsize=args.popsize if args.popsize is not None else 4,
+            seed=args.seed,
+        )
+    except Exception as exc:
+        print(f"Ошибка оптимизации: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        database.close()
+    print(format_optimize(result))
+    return 0
 
 
 def run_calc(db_path: Path | None = None) -> int:
