@@ -432,6 +432,39 @@ def _resource_inputs(
     return consumed, measured, has_measurement
 
 
+def consumed_between(
+    model: Model,
+    unit_name: str,
+    mode_name: str,
+    origin: datetime,
+    as_of: datetime,
+    periods: list[RegimePeriod] | None = None,
+    *,
+    overrides: dict[str, float] | None = None,
+) -> float:
+    """Износ одного вида отказа за интервал. ``overrides`` подменяет параметры."""
+    compiled = CompiledModel(model)
+    prepared = next(
+        (
+            item
+            for item in compiled.modes
+            if item.unit.name == unit_name and item.mode.name == mode_name
+        ),
+        None,
+    )
+    if prepared is None or prepared.error:
+        raise ExpressionError(prepared.error if prepared is not None else "вид отказа не найден")
+    return _integrate_wear(
+        compiled,
+        prepared,
+        origin,
+        as_of,
+        periods or [],
+        dict(model.regime()),
+        overrides,
+    )
+
+
 def _integrate_wear(
     compiled: CompiledModel,
     prepared: _PreparedMode,
@@ -439,6 +472,7 @@ def _integrate_wear(
     as_of: datetime,
     periods: list[RegimePeriod],
     current: dict[str, float],
+    overrides: dict[str, float] | None = None,
 ) -> float:
     """Интеграл v(u) dt. Пропуск в журнале режима считается по текущему режиму."""
     edges = {origin, as_of}
@@ -457,7 +491,7 @@ def _integrate_wear(
         if covering:
             chosen = max(covering, key=lambda period: period.start)
             regime.update(chosen.values)
-        wear = compiled.wear_rate(prepared, regime)
+        wear = compiled.wear_rate(prepared, regime, overrides)
         total += wear * hours_between(left, right)
     return total
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -122,6 +123,16 @@ class MeasurementsTab(QWidget):
         layout.addLayout(self.regime_form)
         layout.addLayout(period_buttons)
         layout.addWidget(self.periods, 1)
+        self.calibration_combo = QComboBox()
+        self.calibration_combo.setObjectName("calibrationCombo")
+        calibrate = QPushButton("Калибровать коэффициент")
+        calibrate.setObjectName("calibrateButton")
+        calibrate.clicked.connect(self._calibrate)
+        calibration = QHBoxLayout()
+        calibration.addWidget(QLabel("Коэффициент износа"))
+        calibration.addWidget(self.calibration_combo, 1)
+        calibration.addWidget(calibrate)
+        layout.addLayout(calibration)
         layout.addWidget(self.message)
 
     def reload(self) -> None:
@@ -157,6 +168,7 @@ class MeasurementsTab(QWidget):
                 self.periods.setItem(index, column, cell)
         self.measurements.resizeColumnsToContents()
         self.periods.resizeColumnsToContents()
+        self._fill_calibration()
 
     def _rebuild_regime_fields(self) -> None:
         while self.regime_form.rowCount():
@@ -266,6 +278,53 @@ class MeasurementsTab(QWidget):
             return
         self.window.db.delete_period(int(self.periods.item(row, 0).data(256)))
         self.window.reload_model()
+
+    def _fill_calibration(self) -> None:
+        current = self.calibration_combo.currentData()
+        self.calibration_combo.clear()
+        for unit in self.window.model.units:
+            for mode in unit.failure_modes:
+                if not mode.rate_parameter:
+                    continue
+                label = f"{unit.name} / {mode.name} ({mode.rate_parameter})"
+                self.calibration_combo.addItem(label, (unit.name, mode.name))
+        if current is not None:
+            for index in range(self.calibration_combo.count()):
+                if self.calibration_combo.itemData(index) == current:
+                    self.calibration_combo.setCurrentIndex(index)
+                    break
+
+    def _calibrate(self) -> None:
+        from millrepair.calibration import calibrate_rate
+
+        chosen = self.calibration_combo.currentData()
+        if not chosen:
+            self.message.setText("Нет вида отказа с коэффициентом скорости износа.")
+            return
+        unit_name, mode_name = chosen
+        model = self.window.model
+        result = calibrate_rate(
+            model,
+            unit_name,
+            mode_name,
+            self.window.db.list_measurements(model.id),
+            self.window.db.list_periods(model.id),
+        )
+        if not result.ok or result.value is None:
+            self.message.setText(result.message)
+            return
+        symbol = model.symbol(result.parameter)
+        if symbol is None or symbol.id is None:
+            self.message.setText(result.message)
+            return
+        self.window.db.set_symbol_value(
+            symbol.id,
+            result.value,
+            comment=result.comment,
+            source="замеры",
+        )
+        self.window.reload_model()
+        self.message.setText(result.message)
 
 
 def _text(value: float | None) -> str:
