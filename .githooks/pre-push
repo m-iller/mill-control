@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Полный набор тестов с покрытием. Если падает — push отменяется.
+# Это локальная замена GitHub Actions: в облако тесты не отправляются.
+# Пропустить в крайнем случае: git push --no-verify
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+bash "$ROOT/scripts/ci_local.sh"
