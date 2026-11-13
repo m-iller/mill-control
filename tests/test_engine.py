@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -132,6 +133,20 @@ def test_measurement_and_history_reduce_residual() -> None:
     # v = 0.01, за 100 ч израсходовано 1, замер 80.
     assert mode.consumed == pytest.approx(1.0)
     assert mode.R == pytest.approx(79.0)
+
+
+def test_seed_file_matches_package_data() -> None:
+    from importlib.resources import files
+
+    packaged = files("millrepair.data").joinpath("default_model.json").read_text(encoding="utf-8")
+    seed = (
+        Path(__file__)
+        .resolve()
+        .parents[1]
+        .joinpath("seed", "default_model.json")
+        .read_text(encoding="utf-8")
+    )
+    assert packaged == seed
 
 
 def test_default_model_is_consistent_and_spread() -> None:
