@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Быстрая проверка перед коммитом: ruff по изменённым файлам и тесты без маркера slow.
+# Пропустить в крайнем случае: git commit --no-verify
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+if [[ -x .venv/bin/ruff ]]; then
+  BIN=".venv/bin"
+elif [[ -x .venv/Scripts/ruff.exe ]]; then
+  BIN=".venv/Scripts"
+else
+  echo "Виртуальное окружение не найдено. Хуки не могут проверить коммит." >&2
+  echo "Установите зависимости: just setup" >&2
+  echo "Либо: python3 -m venv .venv && .venv/bin/pip install -e \".[dev]\"" >&2
+  echo "Затем: git config core.hooksPath .githooks" >&2
+  exit 1
+fi
+
+mapfile -t pyfiles < <(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.py$' || true)
+if ((${#pyfiles[@]})); then
+  "$BIN/ruff" check "${pyfiles[@]}"
+  "$BIN/ruff" format --check "${pyfiles[@]}"
+fi
+
+"$BIN/pytest" -m "not slow" -q
