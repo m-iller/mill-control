@@ -18,6 +18,7 @@ a = Analysis(
     hiddenimports=collect_submodules("millrepair")
     + [
         "matplotlib.backends.backend_qtagg",
+        "matplotlib.backends.backend_agg",
         "scipy.special",
         "scipy.optimize",
     ],

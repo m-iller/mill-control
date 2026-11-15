@@ -82,3 +82,41 @@ def test_calibration_needs_two_measurements() -> None:
     )
     assert result.ok is False
     assert "два" in result.message
+
+
+def test_calibration_handles_coefficients_of_any_scale() -> None:
+    """Коэффициенты порядка 1e7 и 1e-9 подгоняются так же точно, как порядка 1."""
+    from millrepair.engine import consumed_between
+    from millrepair.io_json import load_default_model
+
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cases = [
+        ("Привод", "Контактная усталость зубьев", "доля ресурса зубьев", "N0", 1.0),
+        ("Привод", "Старение изоляции", "доля ресурса изоляции", "L0_ins", 1.0),
+        ("Подшипники", "Износ баббита", "толщина баббита", "k_b", 7.0),
+    ]
+    for unit, mode, quantity, parameter, first in cases:
+        truth = load_default_model()
+        truth.symbol(parameter).value *= 1.5
+        points = [MeasurementPoint(start, unit, quantity, first)]
+        for step in (1, 2, 3):
+            moment = start + timedelta(hours=500 * step)
+            worn = consumed_between(truth, unit, mode, start, moment, [])
+            points.append(MeasurementPoint(moment, unit, quantity, first - worn))
+        result = calibrate_rate(load_default_model(), unit, mode, points, [])
+        assert result.ok, result.message
+        assert result.value == approx(truth.symbol(parameter).value, rel=1e-6), parameter
+
+
+def test_calibration_skips_interval_with_replacement() -> None:
+    """Рост толщины между замерами — замена детали, а не отрицательный износ."""
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    points = [
+        MeasurementPoint(start, "Узел", "толщина", 50),
+        MeasurementPoint(start + timedelta(hours=100), "Узел", "толщина", 30),
+        MeasurementPoint(start + timedelta(hours=101), "Узел", "толщина", 50),
+        MeasurementPoint(start + timedelta(hours=201), "Узел", "толщина", 30),
+    ]
+    result = calibrate_rate(_model(), "Узел", "износ", points, [])
+    assert result.ok, result.message
+    assert result.value == approx(0.02, rel=1e-6)

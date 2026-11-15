@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -18,16 +18,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from millrepair.ui import theme
 from millrepair.util import format_number
 
 _SETTINGS = (
-    ("Q_min", "Q_min, выпуск"),
-    ("P_min", "P_min, производительность"),
-    ("eps", "eps, порог гарантированного отказа"),
-    ("delta", "δ, допуск окна, ч"),
-    ("T_min", "T_min, ч"),
-    ("T_max", "T_max, ч"),
-    ("w_T", "вес цели «максимальная наработка T»"),
+    ("Q_min", "Минимальный выпуск Q_min"),
+    ("P_min", "Минимальная производительность P_min"),
+    ("eps", "Порог гарантированного отказа ε"),
+    ("delta", "Допуск окна δ, ч"),
+    ("T_min", "Нижняя граница T_min, ч"),
+    ("T_max", "Верхняя граница T_max, ч"),
+    ("w_T", "Вес цели «максимальная наработка T»"),
 )
 
 
@@ -64,16 +65,44 @@ class RegimeTab(QWidget):
         save = QPushButton("Сохранить режим и ограничения")
         save.setObjectName("saveRegimeButton")
         save.clicked.connect(self._save)
+        theme.mark_primary(save)
+        theme.set_state(self.message, "info")
+        for table in (self.table, self.units):
+            table.setAlternatingRowColors(True)
+            table.verticalHeader().setVisible(False)
+        self.units.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+
+        regime_box = QGroupBox("Переменные режима")
+        regime_layout = QVBoxLayout(regime_box)
+        regime_hint = QLabel("Галочка «регулируемая» отдаёт величину оптимизатору.")
+        regime_hint.setObjectName("hintLabel")
+        regime_layout.addWidget(regime_hint)
+        regime_layout.addWidget(self.table)
+
+        limits_box = QGroupBox("Критерий и ограничения")
+        limits_layout = QVBoxLayout(limits_box)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form.setHorizontalSpacing(14)
+        limits_layout.addLayout(form)
+        limits_layout.addStretch(1)
+
+        units_box = QGroupBox("Узлы: вес и кратность замены")
+        units_layout = QVBoxLayout(units_box)
+        units_hint = QLabel("«Подбирать» перебирает число замен за цикл k от 1 до 4.")
+        units_hint.setObjectName("hintLabel")
+        units_hint.setWordWrap(True)
+        units_layout.addWidget(units_hint)
+        units_layout.addWidget(self.units)
+
+        lower = QHBoxLayout()
+        lower.setSpacing(12)
+        lower.addWidget(limits_box, 1)
+        lower.addWidget(units_box, 1)
         layout = QVBoxLayout(self)
-        layout.addWidget(
-            QLabel("Переменные режима. Галочка «регулируемая» отдаёт величину оптимизатору.")
-        )
-        layout.addWidget(self.table, 2)
-        layout.addLayout(form)
-        layout.addWidget(
-            QLabel("Веса узлов и кратность замены. «Подбирать» перебирает k от 1 до 4.")
-        )
-        layout.addWidget(self.units, 1)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(10)
+        layout.addWidget(regime_box, 2)
+        layout.addLayout(lower, 3)
         row = QHBoxLayout()
         row.addWidget(save)
         row.addWidget(self.message, 1)
@@ -90,9 +119,12 @@ class RegimeTab(QWidget):
             self._set(row, 3, _text(symbol.value))
             self._set(row, 4, _text(symbol.min_value))
             self._set(row, 5, _text(symbol.max_value))
-            box = QCheckBox()
-            box.setChecked(symbol.adjustable)
-            self.table.setCellWidget(row, 6, box)
+            box = QTableWidgetItem()
+            box.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+            box.setCheckState(
+                Qt.CheckState.Checked if symbol.adjustable else Qt.CheckState.Unchecked
+            )
+            self.table.setItem(row, 6, box)
             self.table.item(row, 0).setData(Qt.ItemDataRole.UserRole, symbol.id)
         index = self.criterion.findData(model.criterion)
         if index >= 0:
@@ -123,7 +155,7 @@ class RegimeTab(QWidget):
                 value = _float_cell(self.table.item(row, 3).text(), "значение")
                 minimum = _optional_cell(self.table.item(row, 4).text(), "минимум")
                 maximum = _optional_cell(self.table.item(row, 5).text(), "максимум")
-                adjustable = self.table.cellWidget(row, 6).isChecked()
+                adjustable = self.table.item(row, 6).checkState() == Qt.CheckState.Checked
                 self.window.db.update_symbol_meta(
                     symbol_id,
                     {
@@ -153,9 +185,11 @@ class RegimeTab(QWidget):
                     multiplicity_set=True,
                 )
         except ValueError as exc:
+            theme.set_state(self.message, "error")
             self.message.setText(str(exc))
             return
         self.window.reload_model()
+        theme.set_state(self.message, "ok")
         self.message.setText("Режим и ограничения сохранены.")
 
     def _set(self, row: int, column: int, text: str, *, editable: bool = True) -> None:

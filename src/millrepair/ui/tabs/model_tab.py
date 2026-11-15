@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
-    QFormLayout,
+    QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 from millrepair.engine import CompiledModel, calculate, reliability_curve
 from millrepair.expr import evaluate
 from millrepair.io_json import ModelImportError, load_model_file, save_model_file
+from millrepair.latex import ROLE_LHS, name_to_latex
 from millrepair.model import (
     FORMULA_ROLES,
     ROLE_LOCAL_NAMES,
@@ -35,9 +37,11 @@ from millrepair.model import (
     analyze_dependencies,
     formula_problems,
 )
+from millrepair.ui import theme
 from millrepair.ui.formula_editor import FormulaEditor
+from millrepair.ui.formula_sheet import FormulaSheetDialog
 from millrepair.ui.history_dialog import HistoryDialog
-from millrepair.util import format_number
+from millrepair.util import format_display, format_number
 
 
 class ModelTab(QWidget):
@@ -57,20 +61,39 @@ class ModelTab(QWidget):
         import_button = QPushButton("Импорт JSON")
         import_button.setObjectName("importJsonButton")
         import_button.clicked.connect(self._import_json)
+        sheet_button = QPushButton("Все формулы")
+        sheet_button.setObjectName("formulaSheetButton")
+        sheet_button.setToolTip("Вся модель в математической записи на одной странице")
+        sheet_button.clicked.connect(self._open_sheet)
         header = QHBoxLayout()
-        header.addWidget(QLabel("Модель"))
+        model_label = QLabel("Модель")
+        model_label.setObjectName("sectionLabel")
+        header.addWidget(model_label)
         header.addWidget(self.combo, 1)
+        header.addWidget(sheet_button)
         header.addWidget(copy_button)
         header.addWidget(export_button)
         header.addWidget(import_button)
 
         self.tree = QTreeWidget()
         self.tree.setObjectName("modelTree")
-        self.tree.setHeaderLabel("Состав модели")
+        self.tree.setColumnCount(2)
+        self.tree.setHeaderLabels(["Состав модели", "Описание"])
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setUniformRowHeights(True)
+        self.tree.setIndentation(14)
+        self.tree.setColumnWidth(0, 270)
+        self._collapsed: set[str] = {"Параметры"}
+        self.tree.itemCollapsed.connect(self._remember_collapsed)
+        self.tree.itemExpanded.connect(self._remember_expanded)
         self.tree.currentItemChanged.connect(lambda *_: self._load_current())
 
         self.title = QLabel("Элемент не выбран")
         self.title.setObjectName("elementTitle")
+        self.title.setWordWrap(True)
+        self.subtitle = QLabel("")
+        self.subtitle.setObjectName("hintLabel")
+        self.subtitle.setWordWrap(True)
         self.units_edit = QLineEdit()
         self.units_edit.setObjectName("unitsEdit")
         self.description_edit = QLineEdit()
@@ -87,22 +110,47 @@ class ModelTab(QWidget):
         self.editor.check_button.clicked.connect(self._check)
         self.editor.save_button.clicked.connect(self._save)
         self.editor.history_button.clicked.connect(self._history)
-        meta = QFormLayout()
-        meta.addRow("Единицы", self.units_edit)
-        meta.addRow("Описание", self.description_edit)
-        meta.addRow("Значение", self.value_edit)
-        meta.addRow("Минимум", self.min_edit)
-        meta.addRow("Максимум", self.max_edit)
-        meta.addRow("", self.adjustable)
+        self.properties = QGroupBox("Свойства")
+        meta = QGridLayout(self.properties)
+        meta.setHorizontalSpacing(10)
+        meta.setVerticalSpacing(6)
+        meta.addWidget(QLabel("Описание"), 0, 0)
+        meta.addWidget(self.description_edit, 0, 1, 1, 5)
+        meta.addWidget(QLabel("Единицы"), 0, 6)
+        meta.addWidget(self.units_edit, 0, 7)
+        value_label = QLabel("Значение")
+        min_label = QLabel("Минимум")
+        max_label = QLabel("Максимум")
+        meta.addWidget(value_label, 1, 0)
+        meta.addWidget(self.value_edit, 1, 1)
+        meta.addWidget(min_label, 1, 2)
+        meta.addWidget(self.min_edit, 1, 3)
+        meta.addWidget(max_label, 1, 4)
+        meta.addWidget(self.max_edit, 1, 5)
+        self._value_widgets = (value_label, self.value_edit)
+        self._range_widgets = (min_label, self.min_edit, max_label, self.max_edit, self.adjustable)
+        meta.addWidget(self.adjustable, 1, 6, 1, 2)
+        meta.setColumnStretch(1, 2)
+        meta.setColumnStretch(3, 1)
+        meta.setColumnStretch(5, 1)
+        meta.setColumnStretch(7, 1)
+        self.formula_box = QGroupBox("Формула")
+        formula_layout = QVBoxLayout(self.formula_box)
+        formula_layout.addWidget(self.editor)
         right = QWidget()
         right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(4, 0, 0, 0)
         right_layout.addWidget(self.title)
-        right_layout.addLayout(meta)
-        right_layout.addWidget(self.editor, 1)
+        right_layout.addWidget(self.subtitle)
+        right_layout.addWidget(self.properties)
+        right_layout.addWidget(self.formula_box, 1)
         splitter = QSplitter()
+        splitter.setChildrenCollapsible(False)
         splitter.addWidget(self.tree)
         splitter.addWidget(right)
-        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([460, 700])
 
         add_unit = QPushButton("Добавить узел")
         add_unit.setObjectName("addUnitButton")
@@ -115,15 +163,18 @@ class ModelTab(QWidget):
         add_symbol.clicked.connect(self._add_symbol)
         delete = QPushButton("Удалить")
         delete.setObjectName("deleteButton")
+        theme.mark_danger(delete)
         delete.clicked.connect(self._delete)
         footer = QHBoxLayout()
         footer.addWidget(add_unit)
         footer.addWidget(add_mode)
         footer.addWidget(add_symbol)
-        footer.addWidget(delete)
         footer.addStretch(1)
+        footer.addWidget(delete)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(10)
         layout.addLayout(header)
         layout.addWidget(splitter, 1)
         layout.addLayout(footer)
@@ -149,11 +200,11 @@ class ModelTab(QWidget):
         model = self.window.model
         units_root = self._group("Узлы")
         for unit in model.units:
-            unit_item = QTreeWidgetItem([unit.name])
+            unit_item = QTreeWidgetItem([unit.name, unit.description])
             unit_item.setData(0, Qt.UserRole, {"type": "unit", "id": unit.id, "name": unit.name})
             unit_item.setToolTip(0, unit.description)
             for mode in unit.failure_modes:
-                mode_item = QTreeWidgetItem([mode.name])
+                mode_item = QTreeWidgetItem([mode.name, mode.description])
                 mode_item.setData(
                     0,
                     Qt.UserRole,
@@ -163,7 +214,8 @@ class ModelTab(QWidget):
                     formula = mode.formulas.get(role)
                     if formula is None:
                         continue
-                    role_item = QTreeWidgetItem([ROLE_TITLES[role]])
+                    role_item = QTreeWidgetItem([ROLE_TITLES[role], formula.expression])
+                    role_item.setToolTip(1, formula.expression)
                     role_item.setData(
                         0,
                         Qt.UserRole,
@@ -184,6 +236,16 @@ class ModelTab(QWidget):
         self._add_symbol_group("Параметры", "parameter")
         self._add_symbol_group("Технологические формулы", "technology")
         self.tree.expandAll()
+        for index in range(self.tree.topLevelItemCount()):
+            group = self.tree.topLevelItem(index)
+            if group.text(0) in self._collapsed:
+                group.setExpanded(False)
+            for child_index in range(group.childCount()):
+                unit_item = group.child(child_index)
+                for mode_index in range(unit_item.childCount()):
+                    mode_item = unit_item.child(mode_index)
+                    if self._key(mode_item) in self._collapsed:
+                        mode_item.setExpanded(False)
         self.tree.blockSignals(False)
         if selected is not None:
             self._reselect(selected)
@@ -198,8 +260,14 @@ class ModelTab(QWidget):
         for symbol in self.window.model.symbols:
             if symbol.kind != kind:
                 continue
-            item = QTreeWidgetItem([symbol.name])
+            note = symbol.description
+            if symbol.formula is None and symbol.value is not None:
+                units = "" if symbol.units.strip() in {"—", "-"} else symbol.units
+                amount = f"{format_display(symbol.value, 6)} {units}".strip()
+                note = f"{amount} · {note}" if note else amount
+            item = QTreeWidgetItem([symbol.name, note])
             item.setToolTip(0, symbol.description)
+            item.setToolTip(1, note)
             item.setData(
                 0,
                 Qt.UserRole,
@@ -207,6 +275,22 @@ class ModelTab(QWidget):
             )
             root.addChild(item)
         self.tree.addTopLevelItem(root)
+
+    @staticmethod
+    def _key(item: QTreeWidgetItem) -> str:
+        data = item.data(0, Qt.UserRole) or {}
+        if data.get("type") == "mode":
+            return f"mode:{data.get('id')}"
+        return item.text(0)
+
+    def _remember_collapsed(self, item: QTreeWidgetItem) -> None:
+        self._collapsed.add(self._key(item))
+
+    def _remember_expanded(self, item: QTreeWidgetItem) -> None:
+        self._collapsed.discard(self._key(item))
+
+    def _open_sheet(self) -> None:
+        FormulaSheetDialog(self.window.model, self).exec()
 
     def _reselect(self, payload: dict[str, Any]) -> None:
         found = self._find_item(self.tree.invisibleRootItem(), payload)
@@ -236,14 +320,26 @@ class ModelTab(QWidget):
         formula_mode = payload is not None and _is_formula(payload, self.window.model)
         for widget in self._numeric_widgets:
             widget.setEnabled(payload is not None and payload.get("type") == "symbol")
-        self.editor.setEnabled(bool(formula_mode))
+        self.editor.setEnabled(payload is not None and payload.get("type") != "group")
+        self.editor.set_formula_visible(bool(formula_mode))
+        self.formula_box.setTitle("Формула" if formula_mode else "Комментарий и история")
+        self.editor.check_button.setVisible(bool(formula_mode))
+        self.properties.setVisible(payload is not None and payload.get("type") == "symbol")
+        self.subtitle.setText("")
         if payload is None or payload.get("type") == "group":
+            self.editor.setEnabled(False)
             self.title.setText("Элемент не выбран")
             self.editor.show_message("Выберите формулу, параметр или переменную режима.")
             return
         if payload["type"] == "symbol":
             symbol = self._symbol(payload["id"])
-            self.title.setText(f"{symbol.name} — {symbol.description or symbol.kind}")
+            for widget in self._value_widgets:
+                widget.setVisible(symbol.kind in {"regime", "parameter"})
+            for widget in self._range_widgets:
+                widget.setVisible(symbol.kind == "regime")
+            self.title.setText(symbol.description or symbol.name)
+            self.subtitle.setText(f"{_KIND_TITLES.get(symbol.kind, symbol.kind)} {symbol.name}")
+            self.editor.set_lhs(name_to_latex(symbol.name))
             self.units_edit.setText(symbol.units)
             self.description_edit.setText(symbol.description)
             self.value_edit.setText("" if symbol.value is None else format_number(symbol.value, 8))
@@ -266,7 +362,9 @@ class ModelTab(QWidget):
         if payload["type"] == "mode_formula":
             mode = self._mode(payload["mode_id"])
             formula = mode.formulas[payload["role"]]
-            self.title.setText(f"{payload['name']}: {ROLE_TITLES[payload['role']]}")
+            self.title.setText(ROLE_TITLES[payload["role"]])
+            self.subtitle.setText(payload["name"].replace("/", " · ") + " — " + mode.description)
+            self.editor.set_lhs(ROLE_LHS[payload["role"]])
             self.units_edit.clear()
             self.description_edit.setText(mode.description)
             self.editor.set_expression(formula.expression, formula.comment, formula.source)
@@ -276,12 +374,16 @@ class ModelTab(QWidget):
         if payload["type"] == "unit":
             unit = self._unit(payload["id"])
             self.title.setText(unit.name)
+            self.subtitle.setText(unit.description)
+            self.editor.setEnabled(False)
             self.description_edit.setText(unit.description)
             self.editor.show_message("У узла можно добавить вид отказа или удалить его.")
             return
         if payload["type"] == "mode":
             mode = self._mode(payload["id"])
             self.title.setText(mode.name)
+            self.subtitle.setText(mode.description)
+            self.editor.setEnabled(False)
             self.description_edit.setText(mode.description)
             self.editor.show_message("Выберите формулу этого вида отказа.")
 
@@ -290,7 +392,7 @@ class ModelTab(QWidget):
         if errors:
             self.editor.show_message("\n".join(errors), error=True)
             return
-        self.editor.show_message(trial or "Формула записана без ошибок.")
+        self.editor.show_message(trial or "Формула записана без ошибок.", ok=True)
 
     def _save(self) -> None:
         payload = self.payload
@@ -337,7 +439,7 @@ class ModelTab(QWidget):
                 source=self.editor.source_text(),
             )
         self.window.reload_model()
-        self.editor.show_message((trial + "\n" if trial else "") + "Версия сохранена.")
+        self.editor.show_message((trial + "\n" if trial else "") + "Версия сохранена.", ok=True)
 
     def _save_symbol_meta(self, symbol_id: int) -> None:
         fields: dict[str, Any] = {
@@ -475,11 +577,13 @@ class ModelTab(QWidget):
         if not versions:
             self.editor.show_message("Версий пока нет.", error=True)
             return
-        dialog = HistoryDialog(versions, self)
+        dialog = HistoryDialog(versions, self, lhs=self.editor._lhs)
         if dialog.exec() == HistoryDialog.Accepted and dialog.chosen_id is not None and not numeric:
             self.window.db.rollback_formula(dialog.chosen_id)
             self.window.reload_model()
-            self.editor.show_message("Выполнен откат: создана новая версия со старым выражением.")
+            self.editor.show_message(
+                "Выполнен откат: создана новая версия со старым выражением.", ok=True
+            )
 
     def _activate_selected(self) -> None:
         model_id = self.combo.currentData()
@@ -619,6 +723,14 @@ class ModelTab(QWidget):
 
     def _unit_name(self, unit_id: int) -> str:
         return self._unit(unit_id).name
+
+
+_KIND_TITLES: dict[str, str] = {
+    "regime": "Переменная режима",
+    "parameter": "Параметр",
+    "derived": "Производная величина",
+    "technology": "Технологическая формула",
+}
 
 
 def _is_formula(payload: dict[str, Any], model) -> bool:

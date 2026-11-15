@@ -76,6 +76,51 @@ def test_calculate_fills_table_and_plots(qtbot, window) -> None:
     assert window.calc_tab.plots.ax_reliability.lines
 
 
+def test_formula_is_drawn_as_math(qtbot, window) -> None:
+    editor = window.model_tab.editor
+    window.model_tab.tree.setCurrentItem(_find(window, name="P_drive"))
+    assert editor.preview.label.rendered
+    assert not editor.preview.label.pixmap().isNull()
+    editor.editor.setPlainText("1 +")
+    editor.refresh_preview()
+    assert not editor.preview.label.rendered
+    assert "не дописана" in editor.preview.label.text()
+    window.model_tab.tree.setCurrentItem(_find(window, type="mode_formula", role="residual"))
+    assert editor.preview.label.rendered
+
+
+def test_parameter_value_can_be_saved_from_model_tab(qtbot, window) -> None:
+    window.model_tab.tree.setCurrentItem(_find(window, name="k_l"))
+    assert window.model_tab.editor.save_button.isEnabled()
+    assert not window.model_tab.editor.editor.isVisibleTo(window.model_tab)
+    window.model_tab.value_edit.setText("0.02")
+    qtbot.mouseClick(window.model_tab.editor.save_button, Qt.MouseButton.LeftButton)
+    assert window.model.symbol("k_l").value == pytest.approx(0.02)
+
+
+def test_formula_sheet_lists_every_formula(qtbot, window) -> None:
+    from millrepair.ui.formula_sheet import FormulaSheetDialog
+
+    dialog = FormulaSheetDialog(window.model, window)
+    qtbot.addWidget(dialog)
+    expected = sum(1 for item in window.model.symbols if item.formula is not None)
+    expected += sum(
+        len(mode.formulas) for unit in window.model.units for mode in unit.failure_modes
+    )
+    assert dialog.formula_count == expected
+
+
+def test_optimize_result_fills_tiles(qtbot, window) -> None:
+    from millrepair.optimize import optimize
+
+    window.tabs.setCurrentWidget(window.calc_tab)
+    result = optimize(window.model, seed=3, maxiter=2, popsize=3)
+    window.calc_tab._show_optimize(result)
+    assert window.calc_tab.table.rowCount() == len(window.model.units)
+    assert "из" in window.calc_tab.tile_window.value.text()
+    assert window.calc_tab.tile_t.value.text().endswith("ч")
+
+
 def _find(window, **expected):
     def walk(item):
         for index in range(item.childCount()):

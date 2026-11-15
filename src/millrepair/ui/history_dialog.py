@@ -16,12 +16,17 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from millrepair.ui import theme
+from millrepair.ui.formula_view import FormulaPreview
+
 
 class HistoryDialog(QDialog):
-    def __init__(self, versions: list[dict[str, Any]], parent=None) -> None:
+    def __init__(self, versions: list[dict[str, Any]], parent=None, *, lhs: str = "") -> None:
         super().__init__(parent)
         self.setWindowTitle("История версий")
-        self.resize(760, 480)
+        self.resize(820, 600)
+        self._lhs = lhs
+        self.preview = FormulaPreview(minimum_height=72)
         self.versions = versions
         self.chosen_id: int | None = None
         self.list = QListWidget()
@@ -30,6 +35,8 @@ class HistoryDialog(QDialog):
         self.diff = QPlainTextEdit()
         self.diff.setReadOnly(True)
         self.diff.setObjectName("historyDiff")
+        self.diff.setFont(theme.monospace_font(10))
+        self.list.setAlternatingRowColors(True)
         for version in versions:
             mark = "● " if version.get("is_active") else "  "
             comment = version.get("comment") or "без комментария"
@@ -40,6 +47,7 @@ class HistoryDialog(QDialog):
         rollback = QPushButton("Откатить")
         rollback.setObjectName("rollbackButton")
         rollback.clicked.connect(self._rollback)
+        theme.mark_primary(rollback)
         close = QPushButton("Закрыть")
         close.clicked.connect(self.reject)
         buttons = QHBoxLayout()
@@ -47,10 +55,12 @@ class HistoryDialog(QDialog):
         buttons.addStretch(1)
         buttons.addWidget(close)
         layout = QVBoxLayout(self)
-        layout.addWidget(
-            QLabel("Выберите одну версию, чтобы увидеть текст, или две — чтобы сравнить.")
-        )
+        layout.setContentsMargins(14, 12, 14, 12)
+        hint = QLabel("Выберите одну версию, чтобы увидеть текст, или две — чтобы сравнить.")
+        hint.setObjectName("hintLabel")
+        layout.addWidget(hint)
         layout.addWidget(self.list, 1)
+        layout.addWidget(self.preview)
         layout.addWidget(self.diff, 2)
         layout.addLayout(buttons)
         if self.list.count():
@@ -88,6 +98,8 @@ class HistoryDialog(QDialog):
         else:
             text = ""
         self.diff.setPlainText(text)
+        shown = selected[-1].get("expression", "") if selected else ""
+        self.preview.set_formula(shown, self._lhs, placeholder="")
 
     def _rollback(self) -> None:
         selected = self._selected()

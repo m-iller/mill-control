@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from millrepair.csv_import import read_measurement_csv
+from millrepair.ui import theme
 from millrepair.util import format_number, parse_datetime
 
 
@@ -103,15 +105,49 @@ class MeasurementsTab(QWidget):
         self.periods.setObjectName("periodsTable")
         self.periods.setHorizontalHeaderLabels(["Начало", "Конец", "Режим", "Комментарий"])
 
-        layout = QVBoxLayout(self)
-        layout.addLayout(cycle)
-        layout.addWidget(QLabel("Замеры. Если замер есть, остаточный ресурс считается от него."))
-        layout.addLayout(measure_form)
-        layout.addLayout(measure_buttons)
-        layout.addWidget(self.measurements, 1)
-        layout.addWidget(
-            QLabel("Фактический режим по периодам. Пропуск заполняется текущими значениями.")
-        )
+        self.calibration_combo = QComboBox()
+        self.calibration_combo.setObjectName("calibrationCombo")
+        calibrate = QPushButton("Калибровать коэффициент")
+        calibrate.setObjectName("calibrateButton")
+        calibrate.clicked.connect(self._calibrate)
+        theme.mark_primary(add_measure)
+        theme.mark_primary(add_period)
+        theme.mark_danger(delete_measure)
+        theme.mark_danger(delete_period)
+        theme.set_state(self.message, "info")
+        self.measure_date.setPlaceholderText("2026-03-01T08:00")
+        self.measure_unit.setPlaceholderText("Футеровка")
+        self.measure_quantity.setPlaceholderText("толщина плиты")
+        self.period_start.setPlaceholderText("2026-03-01T00:00")
+        self.period_end.setPlaceholderText("2026-03-15T00:00")
+        for table in (self.measurements, self.periods):
+            table.setAlternatingRowColors(True)
+            table.verticalHeader().setVisible(False)
+            table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            table.horizontalHeader().setStretchLastSection(True)
+
+        measure_box = QGroupBox("Замеры")
+        measure_layout = QVBoxLayout(measure_box)
+        measure_hint = QLabel("Если замер есть, остаточный ресурс считается от него.")
+        measure_hint.setObjectName("hintLabel")
+        measure_hint.setWordWrap(True)
+        measure_layout.addWidget(measure_hint)
+        measure_layout.addLayout(measure_form)
+        measure_layout.addLayout(measure_buttons)
+        measure_layout.addWidget(self.measurements, 1)
+        calibration = QHBoxLayout()
+        calibration.addWidget(QLabel("Коэффициент износа"))
+        calibration.addWidget(self.calibration_combo, 1)
+        calibration.addWidget(calibrate)
+        measure_layout.addLayout(calibration)
+
+        period_box = QGroupBox("Фактический режим по периодам")
+        period_layout = QVBoxLayout(period_box)
+        period_hint = QLabel("Пропуск в журнале заполняется текущими значениями режима.")
+        period_hint.setObjectName("hintLabel")
+        period_hint.setWordWrap(True)
+        period_layout.addWidget(period_hint)
         period_head = QGridLayout()
         period_head.addWidget(QLabel("Начало"), 0, 0)
         period_head.addWidget(self.period_start, 1, 0)
@@ -119,20 +155,23 @@ class MeasurementsTab(QWidget):
         period_head.addWidget(self.period_end, 1, 1)
         period_head.addWidget(QLabel("Комментарий"), 0, 2)
         period_head.addWidget(self.period_comment, 1, 2)
-        layout.addLayout(period_head)
-        layout.addLayout(self.regime_form)
-        layout.addLayout(period_buttons)
-        layout.addWidget(self.periods, 1)
-        self.calibration_combo = QComboBox()
-        self.calibration_combo.setObjectName("calibrationCombo")
-        calibrate = QPushButton("Калибровать коэффициент")
-        calibrate.setObjectName("calibrateButton")
-        calibrate.clicked.connect(self._calibrate)
-        calibration = QHBoxLayout()
-        calibration.addWidget(QLabel("Коэффициент износа"))
-        calibration.addWidget(self.calibration_combo, 1)
-        calibration.addWidget(calibrate)
-        layout.addLayout(calibration)
+        period_layout.addLayout(period_head)
+        period_layout.addLayout(self.regime_form)
+        period_layout.addLayout(period_buttons)
+        period_layout.addWidget(self.periods, 1)
+
+        columns = QHBoxLayout()
+        columns.setSpacing(12)
+        columns.addWidget(measure_box, 3)
+        columns.addWidget(period_box, 2)
+        cycle_hint = QLabel("Время в UTC, формат ГГГГ-ММ-ДДTчч:мм.")
+        cycle_hint.setObjectName("hintLabel")
+        cycle.addWidget(cycle_hint)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(10)
+        layout.addLayout(cycle)
+        layout.addLayout(columns, 1)
         layout.addWidget(self.message)
 
     def reload(self) -> None:
@@ -170,6 +209,12 @@ class MeasurementsTab(QWidget):
         self.periods.resizeColumnsToContents()
         self._fill_calibration()
 
+    def _say(self, text: str) -> None:
+        """Показать сообщение. Удачные действия зелёные, остальное — ошибка."""
+        good = ("сохранено", "добавлен", "Импортировано", "→")
+        theme.set_state(self.message, "ok" if any(mark in text for mark in good) else "error")
+        self.message.setText(text)
+
     def _rebuild_regime_fields(self) -> None:
         while self.regime_form.rowCount():
             self.regime_form.removeRow(0)
@@ -189,23 +234,23 @@ class MeasurementsTab(QWidget):
             try:
                 text = parse_datetime(text).isoformat()
             except ValueError as exc:
-                self.message.setText(f"Дата начала цикла: {exc}")
+                self._say(f"Дата начала цикла: {exc}")
                 return
         self.window.db.set_cycle_start(self.window.model.id, text or None)
         self.window.reload_model()
-        self.message.setText("Начало цикла сохранено.")
+        self._say("Начало цикла сохранено.")
 
     def _add_measurement(self) -> None:
         try:
             stamp = parse_datetime(self.measure_date.text().strip()).isoformat()
             value = float(self.measure_value.text().strip().replace(",", "."))
         except ValueError as exc:
-            self.message.setText(f"Замер: {exc}")
+            self._say(f"Замер: {exc}")
             return
         unit = self.measure_unit.text().strip()
         quantity = self.measure_quantity.text().strip()
         if not unit or not quantity:
-            self.message.setText("Укажите узел и величину замера.")
+            self._say("Укажите узел и величину замера.")
             return
         self.window.db.add_measurement(
             self.window.model.id,
@@ -217,7 +262,7 @@ class MeasurementsTab(QWidget):
         )
         self.measure_value.clear()
         self.window.reload_model()
-        self.message.setText("Замер добавлен.")
+        self._say("Замер добавлен.")
 
     def _delete_measurement(self) -> None:
         row = self.measurements.currentRow()
@@ -242,10 +287,10 @@ class MeasurementsTab(QWidget):
                     comment=item.get("comment", ""),
                 )
         except (OSError, ValueError) as exc:
-            self.message.setText(f"Импорт: {exc}")
+            self._say(f"Импорт: {exc}")
             return
         self.window.reload_model()
-        self.message.setText(f"Импортировано строк: {len(rows)}.")
+        self._say(f"Импортировано строк: {len(rows)}.")
 
     def _add_period(self) -> None:
         try:
@@ -256,7 +301,7 @@ class MeasurementsTab(QWidget):
                 for name, edit in self._regime_edits.items()
             }
         except ValueError as exc:
-            self.message.setText(f"Период: {exc}")
+            self._say(f"Период: {exc}")
             return
         try:
             self.window.db.add_period(
@@ -267,10 +312,10 @@ class MeasurementsTab(QWidget):
                 comment=self.period_comment.text().strip(),
             )
         except Exception as exc:
-            self.message.setText(str(exc))
+            self._say(str(exc))
             return
         self.window.reload_model()
-        self.message.setText("Период режима добавлен.")
+        self._say("Период режима добавлен.")
 
     def _delete_period(self) -> None:
         row = self.periods.currentRow()
@@ -299,7 +344,7 @@ class MeasurementsTab(QWidget):
 
         chosen = self.calibration_combo.currentData()
         if not chosen:
-            self.message.setText("Нет вида отказа с коэффициентом скорости износа.")
+            self._say("Нет вида отказа с коэффициентом скорости износа.")
             return
         unit_name, mode_name = chosen
         model = self.window.model
@@ -311,11 +356,11 @@ class MeasurementsTab(QWidget):
             self.window.db.list_periods(model.id),
         )
         if not result.ok or result.value is None:
-            self.message.setText(result.message)
+            self._say(result.message)
             return
         symbol = model.symbol(result.parameter)
         if symbol is None or symbol.id is None:
-            self.message.setText(result.message)
+            self._say(result.message)
             return
         self.window.db.set_symbol_value(
             symbol.id,
@@ -324,7 +369,7 @@ class MeasurementsTab(QWidget):
             source="замеры",
         )
         self.window.reload_model()
-        self.message.setText(result.message)
+        self._say(result.message)
 
 
 def _text(value: float | None) -> str:

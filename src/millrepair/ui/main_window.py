@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
 from millrepair import get_version
 from millrepair.cli import open_database
 from millrepair.db import Database
+from millrepair.ui import theme
 from millrepair.ui.tabs.calc_tab import CalcTab
 from millrepair.ui.tabs.measurements_tab import MeasurementsTab
 from millrepair.ui.tabs.model_tab import ModelTab
@@ -23,9 +24,14 @@ class MainWindow(QMainWindow):
         self.db.ensure_default()
         self.model = self.db.load_active_model()
         self.setWindowTitle(f"Окно капремонта мельницы — {get_version()}")
-        self.resize(1180, 820)
+        self.resize(1280, 860)
+        self.setMinimumSize(980, 640)
+        application = QApplication.instance()
+        if application is not None:
+            theme.apply(application)
         self.tabs = QTabWidget()
         self.tabs.setObjectName("mainTabs")
+        self.tabs.setDocumentMode(True)
         self.model_tab = ModelTab(self)
         self.regime_tab = RegimeTab(self)
         self.measurements_tab = MeasurementsTab(self)

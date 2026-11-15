@@ -16,6 +16,9 @@ from millrepair.engine import consumed_between
 from millrepair.expr import free_names
 from millrepair.model import MeasurementPoint, Model, RegimePeriod
 
+# Коэффициент ищется в пределах exp(±_LOG_SPAN) от текущего значения.
+_LOG_SPAN = 30.0
+
 
 @dataclass
 class CalibrationResult:
@@ -61,16 +64,31 @@ def calibrate_rate(
         if item.unit_name == unit_name and item.quantity == mode.measurement_quantity
     ]
     points.sort(key=lambda item: item.measured_at)
+    # Рост величины между замерами означает замену детали: такой промежуток
+    # износ не описывает и в подгонку не входит.
     pairs = [
         (left, right)
         for left, right in zip(points, points[1:], strict=False)
-        if right.measured_at > left.measured_at
+        if right.measured_at > left.measured_at and right.value <= left.value
     ]
     if len(pairs) < 1:
-        return CalibrationResult(False, "Нужны хотя бы два замера одной величины в разные моменты.")
+        return CalibrationResult(
+            False,
+            "Нужны хотя бы два замера одной величины в разные моменты, "
+            "между которыми величина не выросла.",
+        )
+    initial = float(symbol.value)
+    if not np.isfinite(initial) or initial <= 0:
+        return CalibrationResult(
+            False, f"Коэффициент «{parameter_name}» должен быть положительным числом."
+        )
 
+    # Подгоняется не сам коэффициент, а логарифм его отношения к текущему
+    # значению. Иначе шаг и допуски least_squares не зависят от масштаба, и
+    # коэффициенты порядка 1e7 (N0) или 1e-9 (k_b) подгоняются неточно или
+    # не сдвигаются вовсе.
     def residuals(candidate: np.ndarray) -> np.ndarray:
-        coefficient = float(candidate[0])
+        coefficient = initial * float(np.exp(candidate[0]))
         errors = []
         for left, right in pairs:
             consumed = consumed_between(
@@ -89,14 +107,18 @@ def calibrate_rate(
     try:
         fitted = least_squares(
             residuals,
-            x0=np.array([max(float(symbol.value), 1e-12)], dtype=float),
-            bounds=(1e-18, np.inf),
+            x0=np.array([0.0], dtype=float),
+            bounds=(-_LOG_SPAN, _LOG_SPAN),
+            x_scale=1.0,
+            ftol=1e-14,
+            xtol=1e-14,
+            gtol=1e-14,
         )
     except Exception as exc:
         return CalibrationResult(False, f"Калибровка не сошлась: {exc}")
-    if not fitted.success and not np.all(np.isfinite(fitted.fun)):
+    if not fitted.success or not np.all(np.isfinite(fitted.fun)):
         return CalibrationResult(False, "Калибровка не сошлась.")
-    value = float(fitted.x[0])
+    value = initial * float(np.exp(fitted.x[0]))
     start = points[0].measured_at.date().isoformat()
     finish = points[-1].measured_at.date().isoformat()
     comment = f"откалибровано по замерам от {start} до {finish}"
