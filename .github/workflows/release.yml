@@ -1,72 +1,149 @@
-# Запасной выпуск бинарников, когда собрать их локально нельзя.
-# Тесты не запускаются: они уже прошли на машине разработчика.
-# Минуты GitHub Actions ограничены, а минуты Windows-раннеров на приватных
-# репозиториях списываются с коэффициентом 2. Поэтому workflow стартует
-# только вручную и не подписан на push или теги.
+# Выпуск релиза: сборка .deb и Windows, тег и GitHub Release.
 #
-# Релиз v<версия> должен уже существовать (его создаёт scripts/release.sh).
-# Сборка вызывает packaging/build_deb.sh и scripts/build_win.ps1, логика не дублируется.
+# Репозиторий открытый, минуты Actions на стандартных раннерах не тратятся.
+#
+# Запуск:
+#   - сам, при пуше в main, если изменился CHANGELOG.md или этот файл;
+#     версия берётся из первого раздела «## [x.y.z]» журнала изменений;
+#   - вручную (Actions → release → Run workflow), можно указать версию.
+#
+# Если релиз этой версии уже есть, сборка не запускается. Новый релиз:
+# добавить раздел «## [x.y.z] - дата» в CHANGELOG.md и запушить в main.
+# Тег v<версия> создаётся на коммите, с которого шла сборка.
 
 name: release
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - CHANGELOG.md
+      - .github/workflows/release.yml
   workflow_dispatch:
     inputs:
       version:
-        description: "Версия без префикса v, например 0.1.0"
-        required: true
+        description: "Версия без префикса v. Пусто — взять из CHANGELOG.md"
+        required: false
         type: string
-      platforms:
-        description: "Платформы"
-        required: true
-        type: choice
-        options:
-          - both
-          - linux
-          - windows
-        default: both
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  prepare:
+    name: Версия и проверка
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build: ${{ steps.version.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Определить версию
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="${INPUT_VERSION:-}"
+          if [[ -z "$version" ]]; then
+            version="$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Версия не найдена: в CHANGELOG.md нужен раздел вида «## [0.2.0] - 2026-11-15»."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "Релиз v$version уже существует, сборка не нужна."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Будет выпущен v$version."
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
   linux:
     name: Linux deb
-    if: inputs.platforms == 'linux' || inputs.platforms == 'both'
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    # 22.04: бинарник со старой glibc запускается и на новых дистрибутивах.
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Системные пакеты для проверки deb
         run: sudo apt-get update && sudo apt-get install -y binutils lintian
       - name: Сборка и smoke-тест
-        run: bash packaging/build_deb.sh "${{ inputs.version }}"
-      - name: Загрузка в существующий релиз
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release view "v${{ inputs.version }}"
-          gh release upload "v${{ inputs.version }}" \
-            "packaging/output/millrepair_${{ inputs.version }}_amd64.deb" \
-            --clobber
+        run: bash packaging/build_deb.sh "${{ needs.prepare.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: packaging/output/millrepair_${{ needs.prepare.outputs.version }}_amd64.deb
+          if-no-files-found: error
 
   windows:
-    name: Windows zip
-    if: inputs.platforms == 'windows' || inputs.platforms == 'both'
+    name: Windows zip и установщик
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Сборка, smoke-тест и загрузка
+      - name: Inno Setup в PATH
         shell: pwsh
+        run: |
+          $dir = "${env:ProgramFiles(x86)}\Inno Setup 6"
+          if (-not (Test-Path "$dir\ISCC.exe")) { choco install innosetup -y --no-progress }
+          if (Test-Path "$dir\ISCC.exe") { Add-Content $env:GITHUB_PATH $dir }
+      - name: Сборка и smoke-тест
+        shell: pwsh
+        run: ./scripts/build_win.ps1 "${{ needs.prepare.outputs.version }}" -SkipTests -BuildOnly
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            packaging/output/MillRepair-*-windows-x64.zip
+            packaging/output/MillRepair-*-setup.exe
+          if-no-files-found: error
+
+  publish:
+    name: Публикация релиза
+    needs: [prepare, linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Контрольные суммы и описание
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cd ..
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" {flag=1; next}
+            /^## / && flag {exit}
+            flag {print}
+          ' CHANGELOG.md > notes.md
+          if [[ ! -s notes.md ]]; then echo "Выпуск $VERSION." > notes.md; fi
+      - name: Тег и релиз
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./scripts/build_win.ps1 "${{ inputs.version }}" -SkipTests
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          gh release create "v$VERSION" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            --notes-file notes.md

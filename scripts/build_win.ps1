@@ -5,10 +5,12 @@
 #
 #   .\scripts\build_win.ps1 0.1.0
 #   .\scripts\build_win.ps1 0.1.0 -SkipTests
+#   .\scripts\build_win.ps1 0.1.0 -SkipTests -BuildOnly   # только собрать, без тега и загрузки
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [string]$Version,
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [switch]$BuildOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,8 +21,10 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') {
     throw "Версия должна быть вида 0.1.0"
 }
 $Tag = "v$Version"
-git fetch --tags
-git checkout $Tag
+if (-not $BuildOnly) {
+    git fetch --tags
+    git checkout $Tag
+}
 
 if (-not (Test-Path .venv\Scripts\python.exe)) {
     python -m venv .venv
@@ -64,6 +68,12 @@ if ($Iscc) {
     & $Iscc.Source (Join-Path $Root "packaging\windows\millrepair.iss") "/DVersion=$Version"
     $Candidate = Join-Path $Root "packaging\output\MillRepair-$Version-setup.exe"
     if (Test-Path $Candidate) { $SetupPath = $Candidate }
+}
+
+if ($BuildOnly) {
+    Write-Host "Собрано: $ZipPath"
+    if ($SetupPath) { Write-Host "Собрано: $SetupPath" }
+    exit 0
 }
 
 gh release view $Tag | Out-Null
