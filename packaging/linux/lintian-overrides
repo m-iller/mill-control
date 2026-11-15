@@ -5,3 +5,6 @@ unstripped-binary-or-object
 embedded-library
 library-not-linked-against-libc
 shared-library-is-executable
+# Python из actions/setup-python прописывает RUNPATH на каталог раннера.
+# В самодостаточной сборке PyInstaller библиотеки ищет загрузчик, путь не используется.
+custom-library-search-path

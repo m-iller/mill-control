@@ -3,7 +3,8 @@
 # Репозиторий открытый, минуты Actions на стандартных раннерах не тратятся.
 #
 # Запуск:
-#   - сам, при пуше в main, если изменился CHANGELOG.md или этот файл;
+#   - сам, при пуше в main, если изменился CHANGELOG.md, этот файл
+#     или упаковка (packaging/, scripts/build_win.ps1);
 #     версия берётся из первого раздела «## [x.y.z]» журнала изменений;
 #   - вручную (Actions → release → Run workflow), можно указать версию.
 #
@@ -19,6 +20,8 @@ on:
     paths:
       - CHANGELOG.md
       - .github/workflows/release.yml
+      - packaging/**
+      - scripts/build_win.ps1
   workflow_dispatch:
     inputs:
       version:
